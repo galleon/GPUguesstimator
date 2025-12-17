@@ -10,4 +10,16 @@ pinned: false
 license: apache-2.0
 ---
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+# LLM GPU Sizer (Gradio)
+
+This Space estimates:
+- VRAM for model weights + KV cache (worst-case per concurrency)
+- number of GPUs required (with headroom)
+- TTFT and ITL (anchor-based simulation)
+- optionally reads TTFT/ITL from a running vLLM server `/metrics`
+
+## Local dev (uv)
+```bash
+uv venv
+uv pip install -r requirements.txt
+uv run python app.py

@@ -1,0 +1,80 @@
+gpus:
+  - name: "NVIDIA A100-80GB SXM"
+    memory_gb: 80
+    bandwidth_gb_s: 2039
+    fp16_tflops_dense: 312
+    interconnect_bw_gb_s: 600
+    pcie_bw_gb_s: 64
+    fp4_supported: false
+    recommended_server: "Lenovo ThinkSystem SR670 V2 / SR675 V3"
+    cost_tier: "High"
+
+  - name: "NVIDIA A100-80GB PCIe"
+    memory_gb: 80
+    bandwidth_gb_s: 1935
+    fp16_tflops_dense: 312
+    interconnect_bw_gb_s: 0
+    pcie_bw_gb_s: 64
+    fp4_supported: false
+    recommended_server: "Lenovo ThinkSystem SR650 V3 / SR670 V2"
+    cost_tier: "Medium-High"
+
+  - name: "NVIDIA H100-80GB SXM5"
+    memory_gb: 80
+    bandwidth_gb_s: 3350
+    fp16_tflops_dense: 989
+    interconnect_bw_gb_s: 900
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR680a V3"
+    cost_tier: "Premium"
+
+  - name: "NVIDIA H100 NVL (PCIe Pair)"
+    memory_gb: 94
+    bandwidth_gb_s: 3900
+    fp16_tflops_dense: 835
+    interconnect_bw_gb_s: 600
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3"
+    cost_tier: "Premium"
+
+  - name: "NVIDIA H200-141GB SXM"
+    memory_gb: 141
+    bandwidth_gb_s: 4800
+    fp16_tflops_dense: 989
+    interconnect_bw_gb_s: 900
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR680a V3"
+    cost_tier: "Premium+"
+
+  - name: "NVIDIA RTX 6000 Ada"
+    memory_gb: 48
+    bandwidth_gb_s: 960
+    fp16_tflops_dense: 91
+    interconnect_bw_gb_s: 0
+    pcie_bw_gb_s: 64
+    fp4_supported: false
+    recommended_server: "Lenovo ThinkStation PX / ThinkSystem SR650 V3"
+    cost_tier: "Entry-Ent"
+
+  - name: "NVIDIA B200 (Blackwell)"
+    memory_gb: 192
+    bandwidth_gb_s: 8000
+    fp16_tflops_dense: 2250
+    interconnect_bw_gb_s: 1800
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR685a V3"
+    cost_tier: "Next-Gen"
+
+  - name: "NVIDIA GB200 (Grace Blackwell Superchip)"
+    memory_gb: 384
+    bandwidth_gb_s: 16000
+    fp16_tflops_dense: 5000
+    interconnect_bw_gb_s: 3600
+    pcie_bw_gb_s: 256
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR780a V3 (Liquid Cooled)"
+    cost_tier: "Hyperscale"

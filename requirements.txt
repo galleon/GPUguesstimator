@@ -1,0 +1,5 @@
+gradio>=4.0.0
+pyyaml>=6.0.1
+huggingface_hub>=0.22.0
+requests>=2.31.0
+matplotlib>=3.7.0
