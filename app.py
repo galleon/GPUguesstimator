@@ -2,6 +2,7 @@ import gradio as gr
 import yaml
 import math
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import os
 import json
 from huggingface_hub import hf_hub_download
@@ -271,12 +272,18 @@ def calculate_dimensioning(
     free_gb = max(0, cap_gb - used_gb)
     total_used_pct = (used_gb / cap_gb * 100) if cap_gb > 0 else 0
 
+    # Calculate percentages for display
+    w_pct = (w_per_gb / cap_gb * 100) if cap_gb > 0 else 0
+    k_pct = (k_per_gb / cap_gb * 100) if cap_gb > 0 else 0
+    o_pct = (o_per_gb / cap_gb * 100) if cap_gb > 0 else 0
+    free_pct = (free_gb / cap_gb * 100) if cap_gb > 0 else 0
+
     mem_text_alt = (
-        f"Per-GPU Memory Breakdown: Weights {w_per_gb:.1f} GB ({w_per_gb / cap_gb * 100:.1f}%), "
-        f"KV Cache {k_per_gb:.1f} GB ({k_per_gb / cap_gb * 100:.1f}%), "
-        f"Overhead {o_per_gb:.1f} GB ({o_per_gb / cap_gb * 100:.1f}%), "
-        f"Free {free_gb:.1f} GB ({free_gb / cap_gb * 100:.1f}%). "
-        f"Total used: {used_gb:.1f} GB of {cap_gb:.0f} GB ({total_used_pct:.1f}%)."
+        f"Per-GPU Memory Breakdown (Total Capacity: {cap_gb:.0f} GB):\n"
+        f"• Weights: {w_per_gb:.1f} GB ({w_pct:.1f}%) - Model parameters stored in memory. Fixed size based on model architecture and quantization.\n"
+        f"• KV Cache: {k_per_gb:.1f} GB ({k_pct:.1f}%) - Attention key-value cache for all tokens. Grows with number of concurrent users, input context length, and output tokens.\n"
+        f"• Overhead: {o_per_gb:.1f} GB ({o_pct:.1f}%) - Activation buffers, CUDA context, and memory fragmentation. Typically 20% of weights size.\n"
+        f"• Free: {free_gb:.1f} GB ({free_pct:.1f}%) - Available memory headroom for additional operations."
     )
 
     return (
@@ -302,53 +309,79 @@ def create_mem_chart_per_gpu(weights, kv, overhead, single_gpu_cap, num_gpus):
     used = w_per + k_per + o_per
     free = max(0, cap_gb - used)
 
-    # WCAG AA compliant colors with high contrast
-    # Using colors that work well with both light and dark backgrounds
+    # Modern, accessible color palette (WCAG AA compliant)
+    # Using a professional palette with good contrast
     labels = ["Weights", "KV Cache", "Overhead", "Free (Per GPU)"]
-    sizes = [w_per, k_per, o_per, free]
-    # High contrast colors: blue, purple, orange, gray
-    colors = ["#2563eb", "#7c3aed", "#ea580c", "#6b7280"]
+    values = [w_per, k_per, o_per, free]
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    # Professional color palette: Blue, Orange, Green, Gray
+    # High contrast and visually distinct
+    colors = ["#4A90E2", "#F5A623", "#7ED321", "#BDC3C7"]
 
-    # Enhanced labels with both percentage and GB values for clarity
-    def make_autopct(values):
-        def my_autopct(pct):
-            total = sum(values)
-            val = pct * total / 100.0
-            return f"{pct:.1f}%\n({val:.1f} GB)" if val > 0.1 else ""
+    # Calculate percentages for hover text
+    total = sum(values)
+    percentages = [(v / total * 100) if total > 0 else 0 for v in values]
 
-        return my_autopct
+    # Create hover text with detailed information
+    hover_texts = [
+        f"{labels[i]}<br>"
+        f"Value: {values[i]:.1f} GB<br>"
+        f"Percentage: {percentages[i]:.1f}%<br>"
+        f"Capacity: {cap_gb:.0f} GB"
+        for i in range(len(labels))
+    ]
 
-    wedges, texts, autotexts = ax.pie(
-        sizes,
-        labels=labels,
-        autopct=make_autopct(sizes),
-        colors=colors,
-        startangle=90,
-        textprops={"fontsize": 10, "weight": "bold"},
+    # Create donut chart using plotly
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.5,  # Creates the donut (hole in the middle)
+                marker=dict(colors=colors, line=dict(color="#FFFFFF", width=2)),
+                textinfo="label+percent",
+                textposition="outside",
+                hovertemplate="%{hovertext}<extra></extra>",
+                hovertext=hover_texts,
+            )
+        ]
     )
 
-    # Ensure text is readable (WCAG contrast)
-    for autotext in autotexts:
-        autotext.set_color("white")
-        autotext.set_weight("bold")
-
-    ax.set_title(
-        f"Per-GPU Memory Usage (Capacity: {cap_gb:.0f} GB)",
-        fontsize=12,
-        fontweight="bold",
-        pad=20,
+    # Update layout for better appearance
+    fig.update_layout(
+        title={
+            "text": f"Per-GPU Memory Usage (Capacity: {cap_gb:.0f} GB)",
+            "x": 0.5,
+            "xanchor": "center",
+            "font": {"size": 16, "family": "Arial, sans-serif"},
+        },
+        showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5, x=1.15),
+        font=dict(family="Arial, sans-serif", size=12),
+        margin=dict(l=20, r=20, t=50, b=20),
+        height=500,
     )
-    ax.axis("equal")
-    plt.tight_layout()
-    plt.close(fig)
+
     return fig
 
 
 def error_result(msg):
-    empty_fig = plt.figure()
-    plt.close(empty_fig)
+    # Create an empty plotly figure for error state
+    empty_fig = go.Figure()
+    empty_fig.add_annotation(
+        text="Error: Unable to generate chart",
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font=dict(size=14),
+    )
+    empty_fig.update_layout(
+        title="Memory Breakdown",
+        height=500,
+        showlegend=False,
+    )
     return (
         "Error",
         "Error",
@@ -363,7 +396,16 @@ def error_result(msg):
 
 
 # --- UI Setup ---
-with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
+# Custom CSS for better font rendering
+custom_css = """
+* {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif !important;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+"""
+
+with gr.Blocks(title="GPUguesstimator") as demo:
     gr.Markdown(
         """
         # GPUguesstimator
@@ -374,7 +416,7 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
 
     with gr.Row():
         with gr.Column():
-            gr.Markdown("## 1. Workload Configuration")
+            gr.Markdown("## Workload Configuration")
             model_keys = list(MODELS_DB.keys())
             model_dd = gr.Dropdown(
                 choices=model_keys + ["Custom"],
@@ -397,7 +439,7 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
             users = gr.Slider(
                 1,
                 500,
-                value=10,
+                value=50,
                 step=1,
                 label="Concurrent Users",
                 info="Number of simultaneous inference requests to handle",
@@ -405,7 +447,7 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
             ctx_in = gr.Slider(
                 128,
                 128000,
-                value=2048,
+                value=1024,
                 step=128,
                 label="Input Context Length (Tokens)",
                 info="Maximum number of input tokens per request",
@@ -413,13 +455,13 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
             ctx_out = gr.Slider(
                 128,
                 16384,
-                value=512,
+                value=256,
                 step=128,
                 label="Output Tokens (Generation Length)",
                 info="Maximum number of tokens to generate per request",
             )
 
-            gr.Markdown("## 2. Infrastructure Configuration")
+            gr.Markdown("## Infrastructure Configuration")
             gpu_keys = list(HARDWARE_DB.keys())
             default_gpu = gpu_keys[0] if gpu_keys else "NVIDIA H100-80GB SXM5"
 
@@ -445,7 +487,7 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
             btn = gr.Button("Calculate Sizing", variant="primary", size="lg")
 
         with gr.Column():
-            gr.Markdown("## 3. Sizing Results")
+            gr.Markdown("## Sizing Results")
             with gr.Group():
                 res_gpus = gr.Number(
                     label="GPUs Required",
@@ -466,12 +508,12 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
                 )
                 with gr.Row():
                     res_ttft = gr.Textbox(
-                        label="TTFT - Time to First Token",
-                        info="Prefill latency: time to process input and generate first token",
+                        label="TTFT - Time to First Token (Prefill latency)",
+                        info="time to process input and generate first token",
                     )
                     res_itl = gr.Textbox(
                         label="ITL - Inter-Token Latency",
-                        info="Generation speed: time between each generated token",
+                        info="time between each generated token",
                     )
                 res_warnings = gr.Textbox(
                     label="Analysis Notes and Warnings",
@@ -482,7 +524,7 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
                 mem_text_alt = gr.Textbox(
                     label="Memory Breakdown (Text Description)",
                     info="Textual description of memory allocation for screen readers and accessibility",
-                    lines=2,
+                    lines=6,
                 )
 
     def update_repo(choice):
@@ -516,4 +558,4 @@ with gr.Blocks(title="GPUguesstimator", theme=gr.themes.Soft()) as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=gr.themes.Soft(), css=custom_css)
