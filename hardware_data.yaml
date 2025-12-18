@@ -1,53 +1,13 @@
 gpus:
-  - name: "NVIDIA A100-80GB SXM"
-    memory_gb: 80
-    bandwidth_gb_s: 2039
-    fp16_tflops_dense: 312
-    interconnect_bw_gb_s: 600
-    pcie_bw_gb_s: 64
-    fp4_supported: false
-    recommended_server: "Lenovo ThinkSystem SR670 V2 / SR675 V3"
-    cost_tier: "High"
-
-  - name: "NVIDIA A100-80GB PCIe"
-    memory_gb: 80
-    bandwidth_gb_s: 1935
-    fp16_tflops_dense: 312
+  - name: "NVIDIA L4-24GB"
+    memory_gb: 24
+    bandwidth_gb_s: 300
+    fp16_tflops_dense: 30
     interconnect_bw_gb_s: 0
     pcie_bw_gb_s: 64
     fp4_supported: false
-    recommended_server: "Lenovo ThinkSystem SR650 V3 / SR670 V2"
-    cost_tier: "Medium-High"
-
-  - name: "NVIDIA H100-80GB SXM5"
-    memory_gb: 80
-    bandwidth_gb_s: 3350
-    fp16_tflops_dense: 989
-    interconnect_bw_gb_s: 900
-    pcie_bw_gb_s: 128
-    fp4_supported: true
-    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR680a V3"
-    cost_tier: "Premium"
-
-  - name: "NVIDIA H100 NVL (PCIe Pair)"
-    memory_gb: 94
-    bandwidth_gb_s: 3900
-    fp16_tflops_dense: 835
-    interconnect_bw_gb_s: 600
-    pcie_bw_gb_s: 128
-    fp4_supported: true
-    recommended_server: "Lenovo ThinkSystem SR675 V3"
-    cost_tier: "Premium"
-
-  - name: "NVIDIA H200-141GB SXM"
-    memory_gb: 141
-    bandwidth_gb_s: 4800
-    fp16_tflops_dense: 989
-    interconnect_bw_gb_s: 900
-    pcie_bw_gb_s: 128
-    fp4_supported: true
-    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR680a V3"
-    cost_tier: "Premium+"
+    recommended_server: "Lenovo ThinkSystem SR650 V3 / ThinkEdge SE350"
+    cost_tier: "Entry"
 
   - name: "NVIDIA RTX 6000 Ada"
     memory_gb: 48
@@ -57,7 +17,67 @@ gpus:
     pcie_bw_gb_s: 64
     fp4_supported: false
     recommended_server: "Lenovo ThinkStation PX / ThinkSystem SR650 V3"
-    cost_tier: "Entry-Ent"
+    cost_tier: "Mid-Range"
+
+  - name: "NVIDIA L40S-48GB"
+    memory_gb: 48
+    bandwidth_gb_s: 864
+    fp16_tflops_dense: 362
+    interconnect_bw_gb_s: 0
+    pcie_bw_gb_s: 64
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR650 V3"
+    cost_tier: "Mid-Range"
+
+  - name: "NVIDIA A100-80GB PCIe"
+    memory_gb: 80
+    bandwidth_gb_s: 1935
+    fp16_tflops_dense: 312
+    interconnect_bw_gb_s: 0
+    pcie_bw_gb_s: 64
+    fp4_supported: false
+    recommended_server: "Lenovo ThinkSystem SR650 V3 / SR670 V2"
+    cost_tier: "Mid-Range"
+
+  - name: "NVIDIA A100-80GB SXM"
+    memory_gb: 80
+    bandwidth_gb_s: 2039
+    fp16_tflops_dense: 312
+    interconnect_bw_gb_s: 600
+    pcie_bw_gb_s: 64
+    fp4_supported: false
+    recommended_server: "Lenovo ThinkSystem SR670 V2 / SR675 V3"
+    cost_tier: "High-Performance"
+
+  - name: "NVIDIA H100-80GB SXM5"
+    memory_gb: 80
+    bandwidth_gb_s: 3350
+    fp16_tflops_dense: 989
+    interconnect_bw_gb_s: 900
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR680a V3"
+    cost_tier: "High-Performance"
+
+  - name: "NVIDIA H100 NVL (PCIe Pair)"
+    memory_gb: 94
+    bandwidth_gb_s: 3900
+    fp16_tflops_dense: 835
+    interconnect_bw_gb_s: 600
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3"
+    cost_tier: "High-Performance"
+
+  - name: "NVIDIA H200-141GB SXM"
+    memory_gb: 141
+    bandwidth_gb_s: 4800
+    fp16_tflops_dense: 989
+    interconnect_bw_gb_s: 900
+    pcie_bw_gb_s: 128
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR675 V3 / SR680a V3"
+    cost_tier: "High-Performance"
 
   - name: "NVIDIA B200 (Blackwell)"
     memory_gb: 192
@@ -77,4 +97,4 @@ gpus:
     pcie_bw_gb_s: 256
     fp4_supported: true
     recommended_server: "Lenovo ThinkSystem SR780a V3 (Liquid Cooled)"
-    cost_tier: "Hyperscale"
+    cost_tier: "Next-Gen"

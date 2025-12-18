@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import os
 import json
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, HfApi
 
 # --- Configuration & Constants ---
 HARDWARE_FILE = "hardware_data.yaml"
@@ -15,6 +15,27 @@ MODELS_FILE = "models.yaml"
 COMPUTE_EFFICIENCY = 0.45
 MEMORY_EFFICIENCY = 0.70
 INTERCONNECT_EFFICIENCY = 0.65
+
+# Defaults
+ACTIVATION_MEMORY_BUFFER_GB = 0.5
+DEFAULT_GPU_OVERHEAD_PCT = 20
+
+# Embedding Models VRAM Est. (Weights + Runtime Buffer)
+EMBEDDING_MODELS = {
+    "External/API (No Local VRAM)": 0.0,
+    "Mini (All-MiniLM-L6) ~0.2GB": 0.2,
+    "Standard (MPNet-Base/BGE-Base) ~0.6GB": 0.6,
+    "Large (BGE-M3/GTE-Large) ~2.5GB": 2.5,
+    "LLM-Based (E5-Mistral-7B) ~16GB": 16.0,
+}
+
+# Reranker Models VRAM Est. (Weights + Batch Processing Buffer)
+RERANKER_MODELS = {
+    "None (Skip Reranking)": 0.0,
+    "Small (BGE-Reranker-Base) ~0.5GB": 0.5,
+    "Large (BGE-Reranker-Large) ~1.5GB": 1.5,
+    "LLM-Based (BGE-Reranker-v2-Gemma) ~10GB": 10.0,
+}
 
 
 # --- Data Loading ---
@@ -44,7 +65,18 @@ class ModelAnalyzer:
         self.repo_id = repo_id
         self.config = {}
         self.error = None
+        self.api = HfApi(token=hf_token.strip() if hf_token else None)
 
+        # 1. Try to get Model Info (Total Params) from API first
+        self.total_params_safetensors = None
+        try:
+            model_info = self.api.model_info(repo_id)
+            if hasattr(model_info, "safetensors") and model_info.safetensors and "total" in model_info.safetensors:
+                self.total_params_safetensors = model_info.safetensors["total"]
+        except Exception:
+            pass  # Fallback to config parsing
+
+        # 2. Load Config
         if repo_id in MODELS_DB:
             self.config = MODELS_DB[repo_id]
         else:
@@ -60,69 +92,108 @@ class ModelAnalyzer:
                 return
 
         try:
-            self.hidden_size = self.config.get("hidden_size", 4096)
-            self.num_layers = self.config.get("num_hidden_layers", 32)
-            self.num_heads = self.config.get("num_attention_heads", 32)
-            self.num_kv_heads = self.config.get("num_key_value_heads", self.num_heads)
-            self.vocab_size = self.config.get("vocab_size", 32000)
-            self.max_context = self.config.get("max_position_embeddings", 4096)
-            self.intermediate_size = self.config.get(
+            # Handle nested configs (common in multimodal)
+            if "text_config" in self.config:
+                self.llm_config = self.config["text_config"]
+            elif "llm_config" in self.config:
+                self.llm_config = self.config["llm_config"]
+            else:
+                self.llm_config = self.config
+
+            self.hidden_size = self.llm_config.get("hidden_size", 4096)
+            self.num_layers = self.llm_config.get("num_hidden_layers", 32)
+            self.num_heads = self.llm_config.get("num_attention_heads", 32)
+            self.num_kv_heads = self.llm_config.get("num_key_value_heads", self.num_heads)
+            self.vocab_size = self.llm_config.get("vocab_size", 32000)
+            self.max_context = self.llm_config.get("max_position_embeddings", 4096)
+            self.intermediate_size = self.llm_config.get(
                 "intermediate_size", self.hidden_size * 4
             )
 
+            # MoE detection
             self.is_moe = False
             self.num_experts = 1
             self.active_experts = 1
 
-            if "num_local_experts" in self.config:
-                self.is_moe = True
-                self.num_experts = self.config["num_local_experts"]
-                self.active_experts = self.config.get("num_experts_per_tok", 2)
-            elif "notes" in self.config and "moe" in self.config["notes"]:
-                moe_cfg = self.config["notes"]["moe"]
-                self.is_moe = True
-                self.num_experts = moe_cfg.get("num_local_experts", 8)
-                self.active_experts = moe_cfg.get("num_experts_per_tok", 2)
+            # Check for MoE config patterns
+            self._detect_moe()
 
+            # Calculate Parameters
             self.calculate_params()
+
         except Exception as e:
             self.error = f"Error parsing config: {str(e)}"
 
-    def calculate_params(self):
-        self.params_embed = self.vocab_size * self.hidden_size
-        head_dim = self.hidden_size // self.num_heads
-        kv_dim = head_dim * self.num_kv_heads
+    def _detect_moe(self):
+        archs = self.config.get("architectures", [])
+        keys = set(self.config.keys()) | set(self.llm_config.keys())
 
-        self.params_attn = (
-            (self.hidden_size * self.hidden_size)
-            + (self.hidden_size * kv_dim)
-            + (self.hidden_size * kv_dim)
-            + (self.hidden_size * self.hidden_size)
-        )
-
-        dense_mlp = 3 * self.hidden_size * self.intermediate_size
+        if (
+            any("moe" in a.lower() for a in archs)
+            or any("moe" in k.lower() for k in keys)
+            or any("expert" in k.lower() for k in keys)
+        ):
+            self.is_moe = True
 
         if self.is_moe:
-            self.params_mlp_total = dense_mlp * self.num_experts
-            self.params_mlp_active = dense_mlp * self.active_experts
+            self.num_experts = (
+                self.llm_config.get("num_local_experts")
+                or self.llm_config.get("num_experts")
+                or self.llm_config.get("n_routed_experts")
+                or 8
+            )
+            self.active_experts = (
+                self.llm_config.get("num_experts_per_tok")
+                or self.llm_config.get("num_experts_per_token")
+                or 2
+            )
+        elif "notes" in self.config and "moe" in self.config["notes"]:
+            moe_cfg = self.config["notes"]["moe"]
+            self.is_moe = True
+            self.num_experts = moe_cfg.get("num_local_experts", 8)
+            self.active_experts = moe_cfg.get("num_experts_per_tok", 2)
+
+    def calculate_params(self):
+        # If we got exact params from safetensors, use that
+        if self.total_params_safetensors:
+            self.total_params = self.total_params_safetensors
         else:
-            self.params_mlp_total = dense_mlp
-            self.params_mlp_active = dense_mlp
+            # Fallback calculation
+            self.params_embed = self.vocab_size * self.hidden_size
+            head_dim = self.hidden_size // self.num_heads
+            kv_dim = head_dim * self.num_kv_heads
 
-        self.params_norm = 2 * self.hidden_size
-        self.params_layer_total = (
-            self.params_attn + self.params_mlp_total + self.params_norm
-        )
-        self.params_layer_active = (
-            self.params_attn + self.params_mlp_active + self.params_norm
-        )
+            self.params_attn = (
+                (self.hidden_size * self.hidden_size)
+                + (self.hidden_size * kv_dim) * 2
+                + (self.hidden_size * self.hidden_size)
+            )
+            dense_mlp = 3 * self.hidden_size * self.intermediate_size
 
-        self.total_params = self.params_embed + (
-            self.num_layers * self.params_layer_total
-        )
-        self.active_params = self.params_embed + (
-            self.num_layers * self.params_layer_active
-        )
+            if self.is_moe:
+                mlp_total = dense_mlp * self.num_experts
+            else:
+                mlp_total = dense_mlp
+
+            self.params_norm = 2 * self.hidden_size
+            self.params_layer_total = (
+                self.params_attn + mlp_total + self.params_norm
+            )
+            self.total_params = self.params_embed + (
+                self.num_layers * self.params_layer_total
+            )
+
+        # Active Params Calculation (using improved heuristic for MoE)
+        if self.is_moe:
+            expert_param_fraction = 0.8  # 80% of params are in experts
+            always_active = self.total_params * (1 - expert_param_fraction)
+            expert_params = self.total_params * expert_param_fraction
+            expert_ratio = self.active_experts / self.num_experts
+            self.active_params = int(
+                always_active + (expert_params * expert_ratio)
+            )
+        else:
+            self.active_params = self.total_params
 
 
 # --- Calculation Engine ---
@@ -135,6 +206,10 @@ def calculate_dimensioning(
     context_in,
     context_out,
     quantization,
+    gpu_overhead_pct,
+    rag_enabled,
+    rag_model_key,
+    reranker_model_key,
 ):
     analyzer = ModelAnalyzer(model_name_or_repo, hf_token)
     if analyzer.error:
@@ -145,20 +220,24 @@ def calculate_dimensioning(
 
     gpu_spec = HARDWARE_DB[gpu_name]
 
-    # --- Robust Bandwidth Lookup ---
+    # 2. Interconnect & Bandwidth Logic
     nvlink_bw = gpu_spec.get("interconnect_bw_gb_s", 0)
     pcie_bw = gpu_spec.get("pcie_bw_gb_s", 64)
+    gpu_has_nvlink = nvlink_bw > 0
 
     if connectivity_type == "NVLink":
-        interconnect_bw = nvlink_bw
-        if interconnect_bw == 0:
+        if not gpu_has_nvlink:
             return error_result(f"Error: {gpu_name} does not support NVLink.")
+        using_nvlink = True
+        interconnect_bw_effective = nvlink_bw * INTERCONNECT_EFFICIENCY * 1e9
     elif connectivity_type == "PCIe / Standard":
-        interconnect_bw = pcie_bw
+        using_nvlink = False
+        interconnect_bw_effective = pcie_bw * 1e9  # PCIe usually raw
     else:  # Auto
-        interconnect_bw = nvlink_bw if nvlink_bw > 0 else pcie_bw
-
-    interconnect_bw_effective = interconnect_bw * INTERCONNECT_EFFICIENCY * 1e9
+        using_nvlink = gpu_has_nvlink
+        interconnect_bw_effective = (
+            (nvlink_bw if using_nvlink else pcie_bw) * 1e9
+        )
 
     # --- Precision ---
     fp4_supported = gpu_spec.get("fp4_supported", False)
@@ -174,70 +253,115 @@ def calculate_dimensioning(
     else:
         bytes_per_param = 2
 
-    # --- Memory Calculations ---
+    # --- MEMORY CALCULATION ---
+
+    # Static Footprint
     mem_weights = analyzer.total_params * bytes_per_param
 
+    # RAG Memory (Embedding + Reranker)
+    mem_rag = 0
+    if rag_enabled:
+        embed_gb = EMBEDDING_MODELS.get(rag_model_key, 0.6)
+        rerank_gb = RERANKER_MODELS.get(reranker_model_key, 0.5)
+        mem_rag = (embed_gb + rerank_gb) * (1024**3)
+
+    static_footprint = mem_weights + mem_rag
+
+    # Dynamic Footprint (KV + Activation per user)
     head_dim = analyzer.hidden_size // analyzer.num_heads
     total_tokens = context_in + context_out
-    # KV Cache: 2 (K+V) * layers * kv_heads * head_dim * tokens * batch * bytes(2 for FP16)
-    mem_kv = (
+
+    # KV Cache
+    kv_bytes = 2
+    mem_kv_per_user = (
         2
         * analyzer.num_layers
         * analyzer.num_kv_heads
         * head_dim
         * total_tokens
-        * concurrent_users
-        * 2
+        * kv_bytes
     )
 
-    # Overhead: Reverted to simple 20% rule
-    mem_overhead = mem_weights * 0.20
+    # Activation buffer
+    mem_act_per_user = ACTIVATION_MEMORY_BUFFER_GB * 1024**3
 
-    total_mem_required = mem_weights + mem_kv + mem_overhead
+    dynamic_per_user = mem_kv_per_user + mem_act_per_user
+    total_dynamic = dynamic_per_user * concurrent_users
+
+    # Total & Overhead
+    raw_total_mem = static_footprint + total_dynamic
+    total_mem_required = raw_total_mem * (1 + gpu_overhead_pct / 100)
+
     gpu_mem_capacity = gpu_spec["memory_gb"] * (1024**3)
-
     num_gpus = math.ceil(total_mem_required / gpu_mem_capacity)
 
-    # --- Latency & Physics ---
+    # --- LATENCY CALCULATION ---
     compute_mode = "fp16_tflops_dense"
-    total_compute_flops = (
-        gpu_spec.get(compute_mode, 100) * 1e12 * num_gpus * COMPUTE_EFFICIENCY
+    single_gpu_flops = (
+        gpu_spec.get(compute_mode, 100) * 1e12 * COMPUTE_EFFICIENCY
     )
     if quantization == "FP4":
-        total_compute_flops *= 2.5
+        single_gpu_flops *= 2.5
 
-    total_mem_bw = (
-        gpu_spec.get("bandwidth_gb_s", 1000) * 1e9 * num_gpus * MEMORY_EFFICIENCY
+    single_gpu_bw = (
+        gpu_spec.get("bandwidth_gb_s", 1000) * 1e9 * MEMORY_EFFICIENCY
     )
 
-    # TTFT (Prefill)
-    prefill_ops = 2 * analyzer.active_params * context_in * concurrent_users
-    time_compute_prefill = prefill_ops / total_compute_flops
-    # Move weights + write KV
-    time_mem_prefill = (
-        mem_weights + (mem_kv * (context_in / total_tokens))
-    ) / total_mem_bw
-    ttft = max(time_compute_prefill, time_mem_prefill) + (0.05 * num_gpus)
-
-    # TPOT (Decode)
-    gen_ops = 2 * analyzer.active_params * concurrent_users
-    t_compute = gen_ops / total_compute_flops
-
-    # Load all weights + active KV
-    bytes_moved = mem_weights + mem_kv
-    t_memory = bytes_moved / total_mem_bw
-
-    # Comm (AllReduce)
-    if num_gpus > 1:
-        comm_data_per_layer = (
-            2 * analyzer.hidden_size * concurrent_users * bytes_per_param
-        )
-        total_comm_data = comm_data_per_layer * analyzer.num_layers
-        t_comm = total_comm_data / interconnect_bw_effective
+    if num_gpus == 1:
+        effective_flops = single_gpu_flops
+        effective_mem_bw = single_gpu_bw
+        ttft_penalty = 2.0
+        itl_penalty = 1.0
+    elif using_nvlink:
+        effective_flops = single_gpu_flops * num_gpus
+        effective_mem_bw = single_gpu_bw * num_gpus
+        ttft_penalty = 2.0
+        itl_penalty = 1.0
     else:
-        t_comm = 0
+        # PCIe Bottleneck Logic
+        effective_flops = single_gpu_flops * num_gpus
+        effective_mem_bw = single_gpu_bw  # Capped at single card
+        n = num_gpus
+        ttft_penalty = 1.2 * n * n - n
+        itl_penalty = n
 
-    itl = max(t_compute, t_memory) + t_comm
+    # TTFT (Prefill) + RAG Latency
+
+    # 1. RAG Processing (Embedding + Reranking)
+    t_rag_processing = 0
+    if rag_enabled:
+        # Base Embedding Latency (Encode Query)
+        if "Mini" in rag_model_key:
+            t_rag_processing += 0.02
+        elif "Large" in rag_model_key:
+            t_rag_processing += 0.05
+        elif "LLM" in rag_model_key:
+            t_rag_processing += 0.15
+        else:
+            t_rag_processing += 0.03
+
+        # Reranking Latency (Process Documents)
+        if "None" not in reranker_model_key:
+            if "Small" in reranker_model_key:
+                t_rag_processing += 0.15  # 150ms
+            elif "Large" in reranker_model_key:
+                t_rag_processing += 0.35  # 350ms
+            elif "LLM" in reranker_model_key:
+                t_rag_processing += 0.80  # 800ms
+
+    # 2. LLM Compute Time
+    prefill_ops = 2 * analyzer.active_params * context_in * concurrent_users
+    t_compute_prefill = (prefill_ops / effective_flops) * ttft_penalty
+    t_mem_prefill = mem_weights / effective_mem_bw
+
+    ttft = max(t_compute_prefill, t_mem_prefill) + t_rag_processing
+
+    # ITL (Decode)
+    gen_ops = 2 * analyzer.active_params * concurrent_users
+    t_compute_gen = (gen_ops / effective_flops) * itl_penalty
+    bytes_per_step = mem_weights + (total_dynamic / concurrent_users)
+    t_mem_gen = (bytes_per_step / effective_mem_bw) * itl_penalty
+    itl = max(t_compute_gen, t_mem_gen)
 
     # --- Result Formatting ---
     server_name = gpu_spec.get("recommended_server", "Contact Lenovo Support")
@@ -245,49 +369,66 @@ def calculate_dimensioning(
         server_name += " (Requires Multi-Node Clustering)"
 
     warnings = []
-    if interconnect_bw < 100 and num_gpus > 1:
+    if not using_nvlink and num_gpus > 1:
         warnings.append(
-            "Warning: PCIe Bottleneck - High latency expected without NVLink."
+            f"⚠️ No NVLink: Effective Bandwidth capped at {gpu_spec['bandwidth_gb_s']} GB/s. High latency penalty."
         )
     if itl > 0.150:
         warnings.append(
-            f"Warning: High Latency - ITL is {itl * 1000:.0f}ms (exceeds 150ms threshold)."
+            f"⚠️ High Latency: ITL is {itl * 1000:.0f}ms (>150ms)."
+        )
+    if t_rag_processing > 0.5:
+        warnings.append(
+            f"⚠️ High RAG Latency: Reranking is adding {t_rag_processing * 1000:.0f}ms to TTFT."
         )
     if analyzer.is_moe:
         warnings.append(
-            f"Info: MoE Model - Using active params {analyzer.active_params / 1e9:.1f}B for compute estimates."
+            f"ℹ️ MoE Model: Active params {analyzer.active_params / 1e9:.1f}B used for compute."
+        )
+    if rag_enabled:
+        warnings.append(
+            f"ℹ️ RAG Enabled: Allocating {mem_rag / (1024**3):.1f}GB for Models (Embed+Rerank)."
         )
 
     # Chart (Per GPU)
+    overhead_bytes = raw_total_mem * (gpu_overhead_pct / 100)
     fig = create_mem_chart_per_gpu(
-        mem_weights, mem_kv, mem_overhead, gpu_mem_capacity, num_gpus
+        mem_weights,
+        mem_rag,
+        total_dynamic,
+        overhead_bytes,
+        gpu_mem_capacity,
+        num_gpus,
     )
 
     # Textual memory breakdown for accessibility (WCAG 1.1.1 - Text Alternatives)
     w_per_gb = (mem_weights / num_gpus) / (1024**3)
-    k_per_gb = (mem_kv / num_gpus) / (1024**3)
-    o_per_gb = (mem_overhead / num_gpus) / (1024**3)
+    r_per_gb = (mem_rag / num_gpus) / (1024**3)
+    d_per_gb = (total_dynamic / num_gpus) / (1024**3)
+    o_per_gb = (overhead_bytes / num_gpus) / (1024**3)
     cap_gb = gpu_mem_capacity / (1024**3)
-    used_gb = w_per_gb + k_per_gb + o_per_gb
+    used_gb = w_per_gb + r_per_gb + d_per_gb + o_per_gb
     free_gb = max(0, cap_gb - used_gb)
     total_used_pct = (used_gb / cap_gb * 100) if cap_gb > 0 else 0
 
     # Calculate percentages for display
     w_pct = (w_per_gb / cap_gb * 100) if cap_gb > 0 else 0
-    k_pct = (k_per_gb / cap_gb * 100) if cap_gb > 0 else 0
+    r_pct = (r_per_gb / cap_gb * 100) if cap_gb > 0 else 0
+    d_pct = (d_per_gb / cap_gb * 100) if cap_gb > 0 else 0
     o_pct = (o_per_gb / cap_gb * 100) if cap_gb > 0 else 0
     free_pct = (free_gb / cap_gb * 100) if cap_gb > 0 else 0
 
     mem_text_alt = (
         f"Per-GPU Memory Breakdown (Total Capacity: {cap_gb:.0f} GB):\n"
         f"• Weights: {w_per_gb:.1f} GB ({w_pct:.1f}%) - Model parameters stored in memory. Fixed size based on model architecture and quantization.\n"
-        f"• KV Cache: {k_per_gb:.1f} GB ({k_pct:.1f}%) - Attention key-value cache for all tokens. Grows with number of concurrent users, input context length, and output tokens.\n"
-        f"• Overhead: {o_per_gb:.1f} GB ({o_pct:.1f}%) - Activation buffers, CUDA context, and memory fragmentation. Typically 20% of weights size.\n"
+        f"• RAG Models: {r_per_gb:.1f} GB ({r_pct:.1f}%) - Embedding and reranker models. Only allocated if RAG is enabled.\n"
+        f"• Dynamic (KV+Act): {d_per_gb:.1f} GB ({d_pct:.1f}%) - KV cache and activation buffers. Grows with concurrent users, input context length, and output tokens.\n"
+        f"• Overhead: {o_per_gb:.1f} GB ({o_pct:.1f}%) - CUDA context, memory fragmentation, and system buffers. Configurable percentage of total memory.\n"
         f"• Free: {free_gb:.1f} GB ({free_pct:.1f}%) - Available memory headroom for additional operations."
     )
 
     return (
-        f"{analyzer.total_params / 1e9:.1f}B",
+        f"{analyzer.total_params / 1e9:.1f}B (Active: {analyzer.active_params / 1e9:.1f}B)",
         f"{total_mem_required / (1024**3):.1f} GB",
         num_gpus,
         f"{ttft * 1000:.0f} ms",
@@ -299,44 +440,62 @@ def calculate_dimensioning(
     )
 
 
-def create_mem_chart_per_gpu(weights, kv, overhead, single_gpu_cap, num_gpus):
+def create_mem_chart_per_gpu(
+    weights, rag, dynamic, overhead, single_gpu_cap, num_gpus
+):
     # Normalize to Per-GPU view
     w_per = (weights / num_gpus) / (1024**3)
-    k_per = (kv / num_gpus) / (1024**3)
+    r_per = (rag / num_gpus) / (1024**3)
+    d_per = (dynamic / num_gpus) / (1024**3)
     o_per = (overhead / num_gpus) / (1024**3)
     cap_gb = single_gpu_cap / (1024**3)
 
-    used = w_per + k_per + o_per
+    used = w_per + r_per + d_per + o_per
     free = max(0, cap_gb - used)
 
     # Modern, accessible color palette (WCAG AA compliant)
-    # Using a professional palette with good contrast
-    labels = ["Weights", "KV Cache", "Overhead", "Free (Per GPU)"]
-    values = [w_per, k_per, o_per, free]
+    labels = ["Weights", "RAG Models", "Dynamic (KV+Act)", "Overhead", "Free (Per GPU)"]
+    values = [w_per, r_per, d_per, o_per, free]
 
-    # Professional color palette: Blue, Orange, Green, Gray
-    # High contrast and visually distinct
-    colors = ["#4A90E2", "#F5A623", "#7ED321", "#BDC3C7"]
+    # Filter out zero values for cleaner chart
+    clean_labels = []
+    clean_values = []
+    colors_full = ["#4A90E2", "#10b981", "#8b5cf6", "#f59e0b", "#BDC3C7"]
+    clean_colors = []
+
+    for i, val in enumerate(values):
+        if val > 0.05:  # Only show if > 50MB
+            clean_labels.append(labels[i])
+            clean_values.append(val)
+            clean_colors.append(colors_full[i])
+
+    # Professional color palette: Blue, Green, Purple, Orange, Gray
+    colors = clean_colors if clean_colors else colors_full[: len(clean_values)]
 
     # Calculate percentages for hover text
-    total = sum(values)
-    percentages = [(v / total * 100) if total > 0 else 0 for v in values]
+    total = sum(clean_values) if clean_values else sum(values)
+    percentages = [
+        (v / total * 100) if total > 0 else 0
+        for v in (clean_values if clean_values else values)
+    ]
 
     # Create hover text with detailed information
+    display_labels = clean_labels if clean_labels else labels
+    display_values = clean_values if clean_values else values
     hover_texts = [
-        f"{labels[i]}<br>"
-        f"Value: {values[i]:.1f} GB<br>"
+        f"{display_labels[i]}<br>"
+        f"Value: {display_values[i]:.1f} GB<br>"
         f"Percentage: {percentages[i]:.1f}%<br>"
         f"Capacity: {cap_gb:.0f} GB"
-        for i in range(len(labels))
+        for i in range(len(display_labels))
     ]
 
     # Create donut chart using plotly
     fig = go.Figure(
         data=[
             go.Pie(
-                labels=labels,
-                values=values,
+                labels=display_labels,
+                values=display_values,
                 hole=0.5,  # Creates the donut (hole in the middle)
                 marker=dict(colors=colors, line=dict(color="#FFFFFF", width=2)),
                 textinfo="label+percent",
@@ -355,8 +514,7 @@ def create_mem_chart_per_gpu(weights, kv, overhead, single_gpu_cap, num_gpus):
             "xanchor": "center",
             "font": {"size": 16, "family": "Arial, sans-serif"},
         },
-        showlegend=True,
-        legend=dict(orientation="v", yanchor="middle", y=0.5, x=1.15),
+        showlegend=False,
         font=dict(family="Arial, sans-serif", size=12),
         margin=dict(l=20, r=20, t=50, b=20),
         height=500,
@@ -461,6 +619,25 @@ with gr.Blocks(title="GPUguesstimator") as demo:
                 info="Maximum number of tokens to generate per request",
             )
 
+            with gr.Group():
+                gr.Markdown("#### Retrieval Augmented Generation (RAG)")
+                rag_chk = gr.Checkbox(
+                    label="Enable RAG Pipeline", value=False
+                )
+                with gr.Row():
+                    rag_model_dd = gr.Dropdown(
+                        choices=list(EMBEDDING_MODELS.keys()),
+                        value="Standard (MPNet-Base/BGE-Base) ~0.6GB",
+                        label="Embedding Model",
+                        interactive=True,
+                    )
+                    rerank_model_dd = gr.Dropdown(
+                        choices=list(RERANKER_MODELS.keys()),
+                        value="None (Skip Reranking)",
+                        label="Reranker Model",
+                        interactive=True,
+                    )
+
             gr.Markdown("## Infrastructure Configuration")
             gpu_keys = list(HARDWARE_DB.keys())
             default_gpu = gpu_keys[0] if gpu_keys else "NVIDIA H100-80GB SXM5"
@@ -482,6 +659,14 @@ with gr.Blocks(title="GPUguesstimator") as demo:
                 value="FP16/BF16",
                 label="Quantization Precision",
                 info="Model weight precision: FP16/BF16 (standard), INT8 (8-bit), FP4 (4-bit, requires Blackwell)",
+            )
+            overhead_slider = gr.Slider(
+                0,
+                50,
+                value=20,
+                step=5,
+                label="GPU Memory Overhead %",
+                info="Additional memory overhead percentage for CUDA context, fragmentation, and system buffers",
             )
 
             btn = gr.Button("Calculate Sizing", variant="primary", size="lg")
@@ -543,6 +728,10 @@ with gr.Blocks(title="GPUguesstimator") as demo:
             ctx_in,
             ctx_out,
             quant_select,
+            overhead_slider,
+            rag_chk,
+            rag_model_dd,
+            rerank_model_dd,
         ],
         outputs=[
             res_params,
