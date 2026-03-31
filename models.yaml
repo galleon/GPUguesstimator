@@ -121,3 +121,81 @@ models:
       max_position_embeddings: 262144
       intermediate_size: 16384
     torch_dtype: bfloat16
+
+  "Qwen/Qwen3.5-0.8B":
+    hidden_size: 1024
+    num_hidden_layers: 24
+    num_attention_heads: 8
+    num_key_value_heads: 2
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 3584
+
+  "Qwen/Qwen3.5-2B":
+    hidden_size: 2048
+    num_hidden_layers: 24
+    num_attention_heads: 8
+    num_key_value_heads: 2
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 6144
+
+  "Qwen/Qwen3.5-4B":
+    hidden_size: 2560
+    num_hidden_layers: 32
+    num_attention_heads: 16
+    num_key_value_heads: 4
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 9216
+
+  "Qwen/Qwen3.5-9B":
+    hidden_size: 4096
+    num_hidden_layers: 32
+    num_attention_heads: 16
+    num_key_value_heads: 4
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 12288
+
+  "Qwen/Qwen3.5-27B":
+    hidden_size: 5120
+    num_hidden_layers: 64
+    num_attention_heads: 24
+    num_key_value_heads: 4
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 17408
+
+  "Qwen/Qwen3.5-35B-A3B":
+    hidden_size: 2048
+    num_hidden_layers: 40
+    num_attention_heads: 16
+    num_key_value_heads: 2
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 512
+    num_experts: 256
+    num_experts_per_tok: 8
+
+  "Qwen/Qwen3.5-122B-A10B":
+    hidden_size: 3072
+    num_hidden_layers: 48
+    num_attention_heads: 32
+    num_key_value_heads: 2
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 1024
+    num_experts: 256
+    num_experts_per_tok: 8
+
+  "Qwen/Qwen3.5-397B-A17B":
+    hidden_size: 4096
+    num_hidden_layers: 60
+    num_attention_heads: 32
+    num_key_value_heads: 2
+    vocab_size: 248320
+    max_position_embeddings: 262144
+    intermediate_size: 1024
+    num_experts: 512
+    num_experts_per_tok: 10

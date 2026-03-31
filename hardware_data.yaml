@@ -98,3 +98,23 @@ gpus:
     fp4_supported: true
     recommended_server: "Lenovo ThinkSystem SR780a V3 (Liquid Cooled)"
     cost_tier: "Next-Gen"
+
+  - name: "NVIDIA RTX PRO 6000 Blackwell Workstation"
+    memory_gb: 96
+    bandwidth_gb_s: 1792
+    fp16_tflops_dense: 1000
+    interconnect_bw_gb_s: 0
+    pcie_bw_gb_s: 64
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkStation PX"
+    cost_tier: "Next-Gen"
+
+  - name: "NVIDIA RTX PRO 6000 Blackwell Server"
+    memory_gb: 96
+    bandwidth_gb_s: 1597
+    fp16_tflops_dense: 1000
+    interconnect_bw_gb_s: 0
+    pcie_bw_gb_s: 64
+    fp4_supported: true
+    recommended_server: "Lenovo ThinkSystem SR650 V3 / SR675 V3"
+    cost_tier: "Next-Gen"
