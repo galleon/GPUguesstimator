@@ -19,6 +19,8 @@ INTERCONNECT_EFFICIENCY = 0.65
 # Defaults
 ACTIVATION_MEMORY_BUFFER_GB = 0.5
 DEFAULT_GPU_OVERHEAD_PCT = 20
+# Fixed CUDA context/driver overhead per node (not scaled by overhead %)
+FIXED_CUDA_OVERHEAD_GB = 1.0
 
 # Embedding Models VRAM Est. (Weights + Runtime Buffer)
 EMBEDDING_MODELS = {
@@ -271,8 +273,8 @@ def calculate_dimensioning(
     head_dim = analyzer.hidden_size // analyzer.num_heads
     total_tokens = context_in + context_out
 
-    # KV Cache
-    kv_bytes = 2
+    # KV Cache — use the same byte width as the chosen quantization
+    kv_bytes = bytes_per_param
     mem_kv_per_user = (
         2
         * analyzer.num_layers
@@ -288,9 +290,13 @@ def calculate_dimensioning(
     dynamic_per_user = mem_kv_per_user + mem_act_per_user
     total_dynamic = dynamic_per_user * concurrent_users
 
-    # Total & Overhead
-    raw_total_mem = static_footprint + total_dynamic
-    total_mem_required = raw_total_mem * (1 + gpu_overhead_pct / 100)
+    # Overhead only on dynamic memory; static weights are deterministic in size.
+    # A small fixed constant covers CUDA context and driver allocations.
+    total_mem_required = (
+        static_footprint
+        + total_dynamic * (1 + gpu_overhead_pct / 100)
+        + FIXED_CUDA_OVERHEAD_GB * 1024**3
+    )
 
     gpu_mem_capacity = gpu_spec["memory_gb"] * (1024**3)
     num_gpus = math.ceil(total_mem_required / gpu_mem_capacity)
@@ -356,10 +362,10 @@ def calculate_dimensioning(
 
     ttft = max(t_compute_prefill, t_mem_prefill) + t_rag_processing
 
-    # ITL (Decode)
+    # ITL (Decode) — each decode step reads weights + all active KV caches
     gen_ops = 2 * analyzer.active_params * concurrent_users
     t_compute_gen = (gen_ops / effective_flops) * itl_penalty
-    bytes_per_step = mem_weights + (total_dynamic / concurrent_users)
+    bytes_per_step = mem_weights + total_dynamic
     t_mem_gen = (bytes_per_step / effective_mem_bw) * itl_penalty
     itl = max(t_compute_gen, t_mem_gen)
 
@@ -391,7 +397,10 @@ def calculate_dimensioning(
         )
 
     # Chart (Per GPU)
-    overhead_bytes = raw_total_mem * (gpu_overhead_pct / 100)
+    overhead_bytes = (
+        total_dynamic * (gpu_overhead_pct / 100)
+        + FIXED_CUDA_OVERHEAD_GB * 1024**3
+    )
     fig = create_mem_chart_per_gpu(
         mem_weights,
         mem_rag,
