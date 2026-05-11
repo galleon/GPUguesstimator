@@ -86,7 +86,7 @@ gpus:
     interconnect_bw_gb_s: 1800
     pcie_bw_gb_s: 128
     fp4_supported: true
-    recommended_server: "Lenovo ThinkSystem SR685a V3"
+    recommended_server: "Lenovo ThinkSystem SR685a V3 / SR680a V3"
     cost_tier: "Next-Gen"
 
   - name: "NVIDIA GB200 (Grace Blackwell Superchip)"
